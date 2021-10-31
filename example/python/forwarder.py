@@ -1,9 +1,9 @@
 from typing import List, Optional
 
 import numpy
-from full_context_label import extract_full_context_label
 
 from acoustic_feature_extractor import BasePhoneme, JvsPhoneme, OjtPhoneme, SamplingData
+from full_context_label import extract_full_context_label
 
 unvoiced_mora_phoneme_list = ["A", "I", "U", "E", "O", "cl", "pau"]
 mora_phoneme_list = ["a", "i", "u", "e", "o", "N"] + unvoiced_mora_phoneme_list
@@ -103,6 +103,8 @@ class Forwarder:
         )
         phoneme_length[0] = phoneme_length[-1] = 0.1
         phoneme_length = numpy.round(phoneme_length * rate) / rate
+
+        phoneme_length[phoneme_length <= 0] = 0.01
 
         # forward yukarin sa
         (
