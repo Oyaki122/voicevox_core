@@ -1,0 +1,25 @@
+# Tmpfile
+*.swp
+*.save
+
+# Archives
+*.zip
+
+# ONNX
+onnxruntime*/
+
+# Build artifacts
+build/
+lib/
+core/_core.cpp
+
+# Output
+example/python/*.wav
+
+# Python
+example/python/__pycache__/
+*.egg-info
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
