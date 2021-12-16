@@ -336,7 +336,8 @@ jobs:
         if: matrix.python_architecture != ''
         shell: bash
         run: |
-          pip install -r requirements.txt
+          pip install numpy
+          pip install cython --install-option="--no-cython-compile"
           python setup.py test
 
       - name: Organize artifact
