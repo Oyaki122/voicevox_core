@@ -16,12 +16,13 @@
  * @brief 音声合成するための初期化を行う。他の関数を正しく実行するには先に初期化が必要
  * @param root_dir_path 必要なファイルがあるディレクトリ。相対パス・絶対パスどちらも指定可能。文字コードはUTF-8
  * @param use_gpu trueならGPU用、falseならCPU用の初期化を行う
+ * @param cpu_num_threads 推論に用いるスレッド数を設定する。0の場合論理コア数の半分か、物理コア数が設定される
  * @return 成功したらtrue、失敗したらfalse
  * @detail
  * 何度も実行可能。use_gpuを変更して実行しなおすことも可能。
  * 最後に実行したuse_gpuに従って他の関数が実行される。
  */
-extern "C" VOICEVOX_CORE_API bool initialize(const char *root_dir_path, bool use_gpu);
+extern "C" VOICEVOX_CORE_API bool initialize(const char *root_dir_path, bool use_gpu, int cpu_num_threads = 0);
 
 /**
  * @fn
@@ -43,6 +44,14 @@ extern "C" VOICEVOX_CORE_API const char *metas();
 
 /**
  * @fn
+ * 対応デバイス情報を取得する
+ * @brief cpu, cudaのうち、使用可能なデバイス情報を取得する
+ * @return 各デバイスが使用可能かどうかをboolで格納したjson形式の文字列
+ */
+extern "C" VOICEVOX_CORE_API const char *supported_devices();
+
+/**
+ * @fn
  * 音素ごとの長さを求める
  * @brief 音素列から、音素ごとの長さを求める
  * @param length 音素列の長さ
@@ -50,7 +59,8 @@ extern "C" VOICEVOX_CORE_API const char *metas();
  * @param speaker_id 話者番号
  * @return 音素ごとの長さ
  */
-extern "C" VOICEVOX_CORE_API bool yukarin_s_forward(int length, long *phoneme_list, long *speaker_id, float *output);
+extern "C" VOICEVOX_CORE_API bool yukarin_s_forward(int64_t length, int64_t *phoneme_list, int64_t *speaker_id,
+                                                    float *output);
 
 /**
  * @fn
@@ -66,10 +76,11 @@ extern "C" VOICEVOX_CORE_API bool yukarin_s_forward(int length, long *phoneme_li
  * @param speaker_id 話者番号
  * @return モーラごとの音高
  */
-extern "C" VOICEVOX_CORE_API bool yukarin_sa_forward(int length, long *vowel_phoneme_list, long *consonant_phoneme_list,
-                                                     long *start_accent_list, long *end_accent_list,
-                                                     long *start_accent_phrase_list, long *end_accent_phrase_list,
-                                                     long *speaker_id, float *output);
+extern "C" VOICEVOX_CORE_API bool yukarin_sa_forward(int64_t length, int64_t *vowel_phoneme_list,
+                                                     int64_t *consonant_phoneme_list, int64_t *start_accent_list,
+                                                     int64_t *end_accent_list, int64_t *start_accent_phrase_list,
+                                                     int64_t *end_accent_phrase_list, int64_t *speaker_id,
+                                                     float *output);
 
 /**
  * @fn
@@ -82,8 +93,8 @@ extern "C" VOICEVOX_CORE_API bool yukarin_sa_forward(int length, long *vowel_pho
  * @param speaker_id 話者番号
  * @return 音声波形
  */
-extern "C" VOICEVOX_CORE_API bool decode_forward(int length, int phoneme_size, float *f0, float *phoneme,
-                                                 long *speaker_id, float *output);
+extern "C" VOICEVOX_CORE_API bool decode_forward(int64_t length, int64_t phoneme_size, float *f0, float *phoneme,
+                                                 int64_t *speaker_id, float *output);
 
 /**
  * @fn

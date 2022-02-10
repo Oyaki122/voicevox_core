@@ -15,204 +15,67 @@ env:
   SKIP_UPLOADING_RELEASE_ASSET: ${{ secrets.SKIP_UPLOADING_RELEASE_ASSET || '1' }}
 
 jobs:
-  build-onnxruntime:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - artifact_name: onnxruntime-linux-armhf-cpu
-            os: ubuntu-18.04
-            cc_version: '8'
-            cxx_version: '8'
-            arch: arm-linux-gnueabihf
-            ld_symlink_name: ld-linux-armhf.so.3
-            build_opts: --arm --cmake_extra_defines CMAKE_SYSTEM_NAME=Linux CMAKE_SYSTEM_PROCESSOR=armv7l --use_openmp --config Release --parallel --update --build --build_shared_lib
-            result_dir: build/Linux/Release
-
-    env:
-      ONNXRUNTIME_VERSION: v1.9.1
-      # prefix usage: "", "arm-linux-gnueabihf-" => "gcc-8", "arm-linux-gnueabihf-gcc-8" (command name)
-      # suffix usage: "", "-arm-linux-gnueabihf" => "gcc-8", "gcc-8-arm-linux-gnueabihf" (package name)
-      ARCH_PREFIX: "${{ (matrix.arch != '' && matrix.arch) || '' }}${{ (matrix.arch != '' && '-') || '' }}"
-      ARCH_SUFFIX: "${{ (matrix.arch != '' && '-') || '' }}${{ (matrix.arch != '' && matrix.arch) || '' }}"
-
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-        with:
-          repository: microsoft/onnxruntime
-          submodules: true
-          ref: ${{ env.ONNXRUNTIME_VERSION }}
-
-      - name: Dump matrix context
-        env:
-          MATRIX_CONTEXT: ${{ toJSON(matrix) }}
-        run: echo "$MATRIX_CONTEXT" > matrix.json
-
-      - name: Cache build result
-        id: cache-build-result
-        uses: actions/cache@v2
-        with:
-          path: build/
-          key: ${{ matrix.artifact_name }}-${{ env.ONNXRUNTIME_VERSION }}-cache-v1-${{ hashFiles('matrix.json') }}
-
-      - name: Install build dependencies
-        if: steps.cache-build-result.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-              build-essential \
-              git \
-              wget \
-              qemu-user-binfmt \
-              gcc-${{ matrix.cc_version }}${{ env.ARCH_SUFFIX }} \
-              g++-${{ matrix.cxx_version }}${{ env.ARCH_SUFFIX }} \
-              python3
-
-      # ONNX Runtime v1.9.0 requires CMake 3.18 or higher.
-      - name: Install CMake
-        if: steps.cache-build-result.outputs.cache-hit != 'true'
-        env:
-          CMAKE_VERSION: 3.22.0-rc2
-        run: |
-          wget -O cmake.sh "https://github.com/Kitware/CMake/releases/download/v${{ env.CMAKE_VERSION }}/cmake-${{ env.CMAKE_VERSION }}-linux-x86_64.sh"
-          sudo bash cmake.sh --skip-license --prefix=/usr/local
-
-      - name: Configure build environment
-        if: steps.cache-build-result.outputs.cache-hit != 'true'
-        run: |
-          # Required for arm build
-          # https://github.com/microsoft/onnxruntime/issues/4189#issuecomment-642528278
-          echo 'string(APPEND CMAKE_C_FLAGS " -latomic")' >> cmake/CMakeLists.txt
-          echo 'string(APPEND CMAKE_CXX_FLAGS " -latomic")' >> cmake/CMakeLists.txt
-
-          # Prevent Exec Format Error during cross-compiling
-          if [ -n "${{ matrix.ld_symlink_name }}" ]; then
-            sudo ln -s /usr/${{ matrix.arch }}/lib /lib/${{ matrix.arch }}
-            sudo ln -s /lib/${{ matrix.arch }}/ld-*.so /lib/${{ matrix.ld_symlink_name }}
-          fi
-
-      - name: Build ONNX Runtime
-        if: steps.cache-build-result.outputs.cache-hit != 'true'
-        env:
-          CC: ${{ env.ARCH_PREFIX }}gcc-${{ matrix.cc_version }}
-          CXX: ${{ env.ARCH_PREFIX }}g++-${{ matrix.cxx_version }}
-        run: |
-          # add --arm for gcc-8: https://github.com/microsoft/onnxruntime/issues/4189
-          # skip test: https://github.com/microsoft/onnxruntime/issues/2436
-          # ONNX Runtime v1.9.0 requires CMAKE_SYSTEM_PROCESSOR, https://github.com/microsoft/onnxruntime/releases/tag/v1.9.0
-          # Both CMAKE_SYSTEM_NAME and CMAKE_SYSTEM_PROCESSOR are required.
-          bash ./build.sh ${{ matrix.build_opts }}
-
-      - name: Organize artifact
-        run: |
-          mkdir artifact
-
-          # copy shared lib
-          mkdir artifact/lib
-
-          NAME=$(basename ${{ matrix.result_dir }}/libonnxruntime.so.*)
-          cp "${{ matrix.result_dir }}/${NAME}" artifact/lib/
-          ln -s "${NAME}" artifact/lib/libonnxruntime.so
-
-          # copy header files
-          mkdir artifact/include
-
-          readarray -t HEADERS <<EOF
-          onnxruntime/core/session/onnxruntime_c_api.h
-          onnxruntime/core/session/onnxruntime_cxx_api.h
-          onnxruntime/core/session/onnxruntime_cxx_inline.h
-          onnxruntime/core/providers/cpu/cpu_provider_factory.h
-          onnxruntime/core/session/onnxruntime_session_options_config_keys.h
-          onnxruntime/core/session/onnxruntime_run_options_config_keys.h
-          onnxruntime/core/framework/provider_options.h
-          EOF
-
-          for path in "${HEADERS[@]}"; do
-            cp "include/${path}" ./artifact/include/
-          done
-
-          # copy docs & license
-          cp VERSION_NUMBER ./artifact/
-          cp LICENSE ./artifact/
-          cp ThirdPartyNotices.txt ./artifact/
-          cp docs/Privacy.md ./artifact/
-          cp README.md ./artifact/
-
-          echo "$(git rev-parse HEAD)" >> ./artifact/GIT_COMMIT_ID
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v2
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: artifact/*
-          retention-days: 7
-
-
   build-cpp-shared:
-    # Execute this job even if build-onnxruntime failed
-    if: always()
-    needs:
-      - build-onnxruntime
-
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-2019
             device: gpu
-            onnxruntime_url: https://github.com/microsoft/onnxruntime/releases/download/v1.9.0/onnxruntime-win-x64-gpu-1.9.0.zip
-            cmake_additional_options: -DENABLE_CUDA=ON
+            python_architecture: 'x64'
+            onnxruntime_url: https://github.com/microsoft/onnxruntime/releases/download/v1.10.0/onnxruntime-win-x64-gpu-1.10.0.zip
             artifact_name: windows-x64-gpu
 
           - os: windows-2019
             device: cpu-x64
-            onnxruntime_url: https://github.com/microsoft/onnxruntime/releases/download/v1.9.0/onnxruntime-win-x64-1.9.0.zip
+            python_architecture: 'x64'
+            onnxruntime_url: https://github.com/microsoft/onnxruntime/releases/download/v1.10.0/onnxruntime-win-x64-1.10.0.zip
             artifact_name: windows-x64-cpu
 
           - os: windows-2019
             device: cpu-x86
-            onnxruntime_url: https://github.com/microsoft/onnxruntime/releases/download/v1.9.0/onnxruntime-win-x86-1.9.0.zip
+            python_architecture: 'x86'
+            onnxruntime_url: https://github.com/microsoft/onnxruntime/releases/download/v1.10.0/onnxruntime-win-x86-1.10.0.zip
             cmake_additional_options: -DCMAKE_GENERATOR_PLATFORM=Win32
             artifact_name: windows-x86-cpu
 
           - os: windows-2019
             device: cpu-arm64
-            onnxruntime_url: https://github.com/microsoft/onnxruntime/releases/download/v1.9.0/onnxruntime-win-arm64-1.9.0.zip
+            onnxruntime_url: https://github.com/microsoft/onnxruntime/releases/download/v1.10.0/onnxruntime-win-arm64-1.10.0.zip
             cmake_additional_options: -DCMAKE_GENERATOR_PLATFORM=arm64
             artifact_name: windows-arm64-cpu
 
           - os: windows-2019
             device: cpu-arm
-            onnxruntime_url: https://github.com/microsoft/onnxruntime/releases/download/v1.9.0/onnxruntime-win-arm-1.9.0.zip
+            onnxruntime_url: https://github.com/microsoft/onnxruntime/releases/download/v1.10.0/onnxruntime-win-arm-1.10.0.zip
             cmake_additional_options: -DCMAKE_GENERATOR_PLATFORM=arm
             artifact_name: windows-arm-cpu
 
           - os: macos-10.15
             device: cpu-x64
-            onnxruntime_url: https://github.com/microsoft/onnxruntime/releases/download/v1.9.0/onnxruntime-osx-x64-1.9.0.tgz
-            artifact_name: osx-x64-cpu
+            python_architecture: 'x64'
+            onnxruntime_url: https://github.com/microsoft/onnxruntime/releases/download/v1.10.0/onnxruntime-osx-universal2-1.10.0.tgz
+            artifact_name: osx-universal2-cpu
 
           - os: ubuntu-18.04
             device: gpu
-            onnxruntime_url: https://github.com/microsoft/onnxruntime/releases/download/v1.9.0/onnxruntime-linux-x64-gpu-1.9.0.tgz
-            cmake_additional_options: -DENABLE_CUDA=ON
+            python_architecture: 'x64'
+            onnxruntime_url: https://github.com/microsoft/onnxruntime/releases/download/v1.10.0/onnxruntime-linux-x64-gpu-1.10.0.tgz
             artifact_name: linux-x64-gpu
             cc_version: '8'
             cxx_version: '8'
 
           - os: ubuntu-18.04
             device: cpu-x64
-            onnxruntime_url: https://github.com/microsoft/onnxruntime/releases/download/v1.9.0/onnxruntime-linux-x64-1.9.0.tgz
+            python_architecture: 'x64'
+            onnxruntime_url: https://github.com/microsoft/onnxruntime/releases/download/v1.10.0/onnxruntime-linux-x64-1.10.0.tgz
             artifact_name: linux-x64-cpu
             cc_version: '8'
             cxx_version: '8'
 
           - os: ubuntu-18.04
             device: cpu-armhf
-            onnxruntime_artifact_name: onnxruntime-linux-armhf-cpu
+            onnxruntime_url: https://github.com/VOICEVOX/onnxruntime-builder/releases/download/1.10.0.1/onnxruntime-linux-armhf-cpu-v1.10.0.tgz
             artifact_name: linux-armhf-cpu
             cc_version: '8'
             cxx_version: '8'
@@ -229,16 +92,22 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
+      - name: Setup Python
+        if: matrix.python_architecture != ''
+        id: setup-python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8
+          architecture: ${{ matrix.python_architecture }}
+
       - run: mkdir download
 
       # ONNX Runtime
       - name: Export ONNX Runtime url to calc hash
-        if: matrix.onnxruntime_artifact_name == ''
         shell: bash
         run: echo "${{ matrix.onnxruntime_url }}" > download/onnxruntime_url.txt
 
       - name: Cache ONNX Runtime
-        if: matrix.onnxruntime_artifact_name == ''
         uses: actions/cache@v2
         id: onnxruntime-cache
         with:
@@ -247,7 +116,7 @@ jobs:
 
       # download/onnxruntime/lib/onnxruntime.dll
       - name: Download ONNX Runtime (zip)
-        if: matrix.onnxruntime_artifact_name == '' && steps.onnxruntime-cache.outputs.cache-hit != 'true' && endsWith(matrix.onnxruntime_url, '.zip')
+        if: steps.onnxruntime-cache.outputs.cache-hit != 'true' && endsWith(matrix.onnxruntime_url, '.zip')
         shell: bash
         run: |
           curl -L "${{ matrix.onnxruntime_url }}" > download/onnxruntime.zip
@@ -264,7 +133,7 @@ jobs:
       # download/onnxruntime/lib/libonnxruntime.so
       # download/onnxruntime/lib/libonnxruntime.dylib
       - name: Download ONNX Runtime (tgz)
-        if: matrix.onnxruntime_artifact_name == '' && steps.onnxruntime-cache.outputs.cache-hit != 'true' && endsWith(matrix.onnxruntime_url, '.tgz')
+        if: steps.onnxruntime-cache.outputs.cache-hit != 'true' && endsWith(matrix.onnxruntime_url, '.tgz')
         shell: bash
         run: |
           curl -L "${{ matrix.onnxruntime_url }}" > download/onnxruntime.tgz
@@ -272,16 +141,11 @@ jobs:
           tar xf download/onnxruntime.tgz -C download/onnxruntime --strip-components 1
           rm download/onnxruntime.tgz
 
-      - name: Download ONNX Runtime (artifact)
-        if: matrix.onnxruntime_artifact_name != ''
-        uses: actions/download-artifact@v2
-        with:
-          name: ${{ matrix.onnxruntime_artifact_name }}
-          path: download/onnxruntime/
-
       # Build
       - if: startsWith(matrix.os, 'windows')
         uses: ilammy/msvc-dev-cmd@v1
+        with: 
+          arch: ${{ matrix.python_architecture }}
 
       - if: startsWith(matrix.os, 'mac')
         uses: jwlawson/actions-setup-cmake@v1.9
@@ -297,11 +161,18 @@ jobs:
             g++-${{ matrix.cxx_version }}${{ env.ARCH_SUFFIX }} \
             cmake
 
-      - name: Configure (Windows, macOS)
-        if: ${{ !startsWith(matrix.os, 'ubuntu') }} # '!' cannot be used as a first character in YAML
+      - name: Configure (Windows)
+        if: startsWith(matrix.os, 'windows')
         shell: bash
         run: |
           cmake -DONNXRUNTIME_DIR=download/onnxruntime ${{ matrix.cmake_additional_options }} .
+
+      # libcore.dylib for macOS universal
+      - name: Configure (macOS)
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: |
+          env CMAKE_OSX_ARCHITECTURES="x86_64;arm64" cmake -DONNXRUNTIME_DIR=download/onnxruntime ${{ matrix.cmake_additional_options }} .
 
       - name: Configure (Linux)
         if: startsWith(matrix.os, 'ubuntu')
@@ -320,6 +191,13 @@ jobs:
           # copy lib to core/lib/* and set rpath (linux)
           cmake --install .
 
+      - name: Unit test ${{ matrix.python_architecture }}
+        if: matrix.python_architecture != ''
+        shell: bash
+        run: |
+          pip install -r requirements.txt
+          python setup.py test
+
       - name: Organize artifact
         shell: bash
         run: |
@@ -332,21 +210,6 @@ jobs:
           cp -v core/lib/core* artifact/ || true
           # copy Linux/macOS shared library if exists
           cp -v core/lib/libcore* artifact/ || true
-
-          # copy libonnxruntime
-          if [ "${{ matrix.onnxruntime_artifact_name }}" != "" ]; then
-            mkdir -p "artifact/onnxruntime-${{ matrix.artifact_name }}/"
-
-            # copy docs and license (all files in root dir)
-            find "download/onnxruntime/" -maxdepth 1 -type f | xargs -I{} cp -v {} "artifact/onnxruntime-${{ matrix.artifact_name }}/"
-
-            # copy Windows DLL if exists
-            cp -v core/lib/onnxruntime* "artifact/onnxruntime-${{ matrix.artifact_name }}/" || true
-            # copy Linux shared library if exists
-            cp -v core/lib/libonnxruntime.so.* "artifact/onnxruntime-${{ matrix.artifact_name }}/" || true
-            # copy macOS shared library if exists
-            cp -v core/lib/libonnxruntime.dylib "artifact/onnxruntime-${{ matrix.artifact_name }}/" || true
-          fi
 
       # Upload
       - name: Upload artifact
@@ -384,15 +247,15 @@ jobs:
           mkdir release
 
           readarray -t MAPPINGS <<EOF
-          windows-x64-gpu   core.dll      core_gpu_x64_nvidia.dll
-          windows-x64-cpu   core.dll      core_cpu_x64.dll
-          windows-x86-cpu   core.dll      core_cpu_x86.dll
-          windows-arm64-cpu core.dll      core_cpu_arm64.dll
-          windows-arm-cpu   core.dll      core_cpu_arm.dll
-          osx-x64-cpu       libcore.dylib libcore_cpu_x64.dylib
-          linux-x64-gpu     libcore.so    libcore_gpu_x64_nvidia.so
-          linux-x64-cpu     libcore.so    libcore_cpu_x64.so
-          linux-armhf-cpu   libcore.so    libcore_cpu_armhf.so
+          windows-x64-gpu     core.dll      core_gpu_x64_nvidia.dll
+          windows-x64-cpu     core.dll      core_cpu_x64.dll
+          windows-x86-cpu     core.dll      core_cpu_x86.dll
+          windows-arm64-cpu   core.dll      core_cpu_arm64.dll
+          windows-arm-cpu     core.dll      core_cpu_arm.dll
+          osx-universal2-cpu  libcore.dylib libcore_cpu_universal2.dylib
+          linux-x64-gpu       libcore.so    libcore_gpu_x64_nvidia.so
+          linux-x64-cpu       libcore.so    libcore_cpu_x64.so
+          linux-armhf-cpu     libcore.so    libcore_cpu_armhf.so
           EOF
 
           for line in "${MAPPINGS[@]}"; do
@@ -411,7 +274,7 @@ jobs:
 
           mv -v artifacts/*-cpp-shared/* release/
 
-          cp core.h release/
+          cp core/src/core.h release/
 
           echo "${{ env.BUILD_IDENTIFIER }}" > release/VERSION
 
